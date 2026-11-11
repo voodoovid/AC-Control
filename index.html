@@ -63,6 +63,19 @@ header [data-hint]:last-child:hover::after{left:auto;right:0;transform:none}
 .seg button{flex:1;min-width:58px;padding:8px 6px;border-radius:10px;border:1px solid var(--line);background:var(--panel2);font-size:13px;font-weight:600;color:var(--muted)}
 .seg button.on{color:#06121f;background:var(--c,var(--accent));border-color:var(--c,var(--accent))}
 .lbl{font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);margin-top:14px}
+.aq{display:grid;grid-template-columns:repeat(auto-fit,minmax(86px,1fr));gap:8px;margin-top:14px}
+.tile{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:9px 10px}
+.tile .k{font-size:11px;text-transform:uppercase;letter-spacing:.7px;color:var(--muted);display:flex;align-items:center;gap:6px}
+.tile .v{font-size:19px;font-weight:600;margin-top:2px;font-variant-numeric:tabular-nums}
+.tile .v small{font-size:11px;color:var(--muted);font-weight:500;margin-left:3px}
+.tile .s{font-size:11px;color:var(--muted)}
+.tile .d{width:7px;height:7px;border-radius:50%;background:var(--muted)}
+.tile.good .d{background:var(--good)} .tile.ok .d{background:var(--auto)} .tile.poor .d{background:var(--heat)} .tile.bad .d{background:var(--bad)}
+.kv{display:grid;gap:0}
+.kv div{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--line);font-size:14px}
+.kv div:last-child{border-bottom:0}
+.kv span:first-child{color:var(--muted)}
+.kv span:last-child{text-align:right;font-variant-numeric:tabular-nums}
 .timerline{margin-top:14px;padding:10px 12px;border-radius:10px;background:var(--panel2);border:1px dashed var(--line);font-size:13px;color:var(--muted);display:flex;justify-content:space-between;align-items:center;gap:8px}
 .timerline b{color:var(--text)}
 .footrow{display:flex;gap:8px;margin-top:14px}
@@ -156,10 +169,16 @@ input[type=text],input[type=password],input[type=time],select{width:100%;padding
   </div>
 </div></div>
 
+<!-- Details window -->
+<div class="scrim" id="winDetails"><div class="win">
+  <header><h1 id="detTitle">Details</h1><button class="btn icon" data-close data-hint="Close">✕</button></header>
+  <div class="body"><div class="kv" id="detBody"></div></div>
+</div></div>
+
 <div class="toast" id="toast"></div>
 
 <script>
-const VERSION = "v0.3";
+const VERSION = "v0.4";
 document.getElementById("verTag").textContent = VERSION;
 
 const API = "https://home.sensibo.com/api/v2";
@@ -259,14 +278,61 @@ function card(p){
       <button class="round" data-act="inc" data-id="${p.id}" data-hint="Raise target temperature">+</button>
     </div>
     <div class="meas"><span>Room <b>${m.temperature!=null ? toUnit(m.temperature)+"°"+unit : "--"}</b></span><span>Humidity <b>${m.humidity!=null ? Math.round(m.humidity)+"%" : "--"}</b></span></div>
+    ${aqTiles(p)}
     <div class="lbl">Mode</div>
     <div class="seg">${modes.map(x=>`<button class="${x===mode?"on":""}" style="--c:${MODE_COLOR[x]||"var(--accent)"}" data-act="mode" data-v="${x}" data-id="${p.id}" data-hint="Set mode to ${MODE_LABEL[x]||x}">${MODE_LABEL[x]||x}</button>`).join("")}</div>
     <div class="lbl">Fan</div>
     <div class="seg">${fans.map(x=>`<button class="${x===s.fanLevel?"on":""}" data-act="fan" data-v="${x}" data-id="${p.id}" data-hint="Set fan to ${x}">${x[0].toUpperCase()+x.slice(1)}</button>`).join("")}</div>
-    ${(()=>{ const mh=minHeat(p); return mh ? `<div class="footrow"><button class="btn" data-act="minheat" data-id="${p.id}" data-hint="Heat at the lowest temperature this unit allows (${mh.t}°${mh.u})">Min heat · ${mh.t}°${mh.u}</button></div>` : ""; })()}
+    ${(()=>{ const mh=minHeat(p); return `<div class="footrow">${mh ? `<button class="btn" data-act="minheat" data-id="${p.id}" data-hint="Heat at the lowest temperature this unit allows (${mh.t}°${mh.u})">Min heat · ${mh.t}°${mh.u}</button>` : ""}<button class="btn" data-act="details" data-id="${p.id}" data-hint="Signal, firmware, filter and other readings">Details</button></div>`; })()}
     <div class="timerline">${tline}<button class="btn" data-act="timer" data-id="${p.id}" data-hint="Set a time for the AC to start">⏱ Timer</button></div>
   </div>`;
 }
+const AQ = {
+  co2:  {label:"CO₂",  unit:"ppm",   lim:[800,1000,1500], names:["Good","Fair","Poor","Bad"]},
+  tvoc: {label:"TVOC", unit:"ppb",   lim:[220,660,2200],  names:["Good","Fair","Poor","Bad"]},
+  pm25: {label:"PM2.5",unit:"µg/m³", lim:[12,35,55],      names:["Good","Fair","Poor","Bad"]}
+};
+const LV = ["good","ok","poor","bad"];
+function aqTiles(p){
+  const m = p.measurements || {}; let out = "";
+  Object.keys(AQ).forEach(k => {
+    if(m[k]==null) return;
+    const a = AQ[k], v = m[k]; let i = a.lim.findIndex(x => v < x); if(i<0) i = 3;
+    out += `<div class="tile ${LV[i]}"><div class="k"><span class="d"></span>${a.label}</div><div class="v">${Math.round(v)}<small>${a.unit}</small></div><div class="s">${a.names[i]}</div></div>`;
+  });
+  if(m.feelsLike!=null) out += `<div class="tile"><div class="k">Feels like</div><div class="v">${toUnit(m.feelsLike)}<small>°${unit}</small></div></div>`;
+  if(m.temperature!=null && m.humidity!=null){
+    const g = Math.log(m.humidity/100) + 17.62*m.temperature/(243.12+m.temperature);
+    const dp = 243.12*g/(17.62-g);
+    out += `<div class="tile"><div class="k">Dew point</div><div class="v">${toUnit(dp)}<small>°${unit}</small></div></div>`;
+  }
+  return out ? `<div class="aq">${out}</div>` : "";
+}
+function ago(sec){
+  if(sec==null) return "--"; if(sec<90) return "just now";
+  if(sec<5400) return Math.round(sec/60)+" min ago"; if(sec<172800) return Math.round(sec/3600)+" h ago";
+  return Math.round(sec/86400)+" days ago";
+}
+function openDetails(p){
+  const m = p.measurements || {}, cs = p.connectionStatus || {}, f = p.filtersCleaning || {};
+  const rows = [];
+  rows.push(["Model", p.productModel || "--"]);
+  rows.push(["Firmware", p.firmwareVersion || "--"]);
+  rows.push(["Last seen", cs.lastSeen ? ago(cs.lastSeen.secondsAgo) : (cs.isAlive===false ? "Offline" : "Now")]);
+  if(m.rssi!=null){ const q = m.rssi>-60?"Strong":m.rssi>-75?"Good":m.rssi>-85?"Weak":"Very weak"; rows.push(["Wi-Fi signal", q+" ("+m.rssi+" dBm)"]); }
+  if(m.motion!=null) rows.push(["Motion", m.motion ? "Detected" : "None"]);
+  if(f.filtersCleanSecondsThreshold){
+    const pct = Math.min(100, Math.round(100*(f.acOnSecondsSinceLastFiltersClean||0)/f.filtersCleanSecondsThreshold));
+    rows.push(["Filter", f.shouldCleanFilters ? "Clean now ("+pct+"% used)" : pct+"% used"]);
+  }
+  const known = ["temperature","humidity","feelsLike","rssi","motion","co2","tvoc","pm25","time"];
+  Object.keys(m).filter(k => known.indexOf(k)<0 && typeof m[k]==="number").forEach(k => rows.push([k, String(m[k])]));
+  rows.push(["Refreshed", lastLoad ? lastLoad.toLocaleTimeString([], {hour:"numeric",minute:"2-digit"}) : "--"]);
+  $("#detTitle").textContent = "Details — " + (p.room ? p.room.name : "AC");
+  $("#detBody").innerHTML = rows.map(r => `<div><span>${r[0]}</span><span>${r[1]}</span></div>`).join("");
+  openWin("winDetails");
+}
+let lastLoad = null;
 function minHeat(p){
   const u = (p.acState && p.acState.temperatureUnit) || "C";
   const h = p.remoteCapabilities && p.remoteCapabilities.modes && p.remoteCapabilities.modes.heat;
@@ -296,6 +362,7 @@ async function pushState(p, patch){
 async function act(a, id, v){
   const p = pods.find(x=>x.id===id); if(!p) return;
   const s = p.acState;
+  if(a==="details") return openDetails(p);
   if(a==="power") return pushState(p,{on:!s.on});
   if(a==="minheat"){ const mh=minHeat(p); if(!mh) return; return pushState(p,{mode:"heat", on:true, targetTemperature:mh.t}); }
   if(a==="mode")  return pushState(p,{mode:v, on:true});
@@ -351,13 +418,14 @@ async function loadTimer(id){
 }
 
 /* ---------- data load (pre-loaded on open) ---------- */
-async function load(){
+async function load(silent){
   if(!key()){ render(); return; }
   try{
-    const r = await api("/users/me/pods?fields=id,room,acState,measurements,connectionStatus,remoteCapabilities");
+    const r = await api("/users/me/pods?fields=*");
     pods = r.result || [];
     await Promise.all(pods.map(p=>loadTimer(p.id)));
-  }catch(e){ pods = []; $("#view").innerHTML = `<div class="empty"><h2>Couldn't load units</h2>${e.message}<br>Open the ✓ Test to see which check fails.</div>`; return; }
+    lastLoad = new Date();
+  }catch(e){ if(silent) return; pods = []; $("#view").innerHTML = `<div class="empty"><h2>Couldn't load units</h2>${e.message}<br>Open the ✓ Test to see which check fails.</div>`; return; }
   render();
 }
 
@@ -403,6 +471,8 @@ $("#runTest").onclick = runTest;
 $("#btnTest").onclick = () => { openWin("winTest"); runTest(); };
 
 renderTabs(); render(); load();
+setInterval(() => { if(document.hidden || tab!=="cabana" || !key() || document.querySelector(".scrim.open")) return; load(true); }, 60000);
+document.addEventListener("visibilitychange", () => { if(!document.hidden && key() && !document.querySelector(".scrim.open")) load(true); });
 </script>
 </body>
 </html>
