@@ -113,6 +113,9 @@ input[type=text],input[type=password],input[type=time],select{width:100%;padding
 <div class="scrim" id="winSettings"><div class="win">
   <header><h1>Settings</h1><button class="btn icon" data-close data-hint="Close">✕</button></header>
   <div class="body">
+    <label for="relayIn">Relay URL (Cloudflare Worker)</label>
+    <input type="text" id="relayIn" autocomplete="off" autocapitalize="off" placeholder="https://ac-relay.your-name.workers.dev">
+    <p class="note">Needed because Sensibo blocks direct calls from web pages. Leave empty to try a direct connection.</p>
     <label for="keyIn">Sensibo API key (Cabana)</label>
     <input type="password" id="keyIn" autocomplete="off" placeholder="Paste your Sensibo API key">
     <div class="footrow">
@@ -156,11 +159,11 @@ input[type=text],input[type=password],input[type=time],select{width:100%;padding
 <div class="toast" id="toast"></div>
 
 <script>
-const VERSION = "v0.1";
+const VERSION = "v0.2";
 document.getElementById("verTag").textContent = VERSION;
 
 const API = "https://home.sensibo.com/api/v2";
-const LS = { key:"acctl.sensibo.key", unit:"acctl.unit", tab:"acctl.tab" };
+const LS = { key:"acctl.sensibo.key", unit:"acctl.unit", tab:"acctl.tab", relay:"acctl.relay" };
 const $ = s => document.querySelector(s);
 const store = {
   get(k){ try{ return localStorage.getItem(k) }catch(e){ return null } },
@@ -181,11 +184,13 @@ function toast(msg, err){
   clearTimeout(toast._t); toast._t = setTimeout(()=>t.style.display="none", 2800);
 }
 const key = () => store.get(LS.key);
+const relay = () => (store.get(LS.relay)||"").trim().replace(/\/+$/,"");
+const base = () => relay() ? relay()+"/sensibo/v2" : API;
 
 async function api(path, opts={}){
   const k = key(); if(!k) throw new Error("No API key saved");
   const sep = path.includes("?") ? "&" : "?";
-  const res = await fetch(API + path + sep + "apiKey=" + encodeURIComponent(k), {
+  const res = await fetch(base() + path + sep + "apiKey=" + encodeURIComponent(k), {
     method: opts.method || "GET",
     headers: opts.body ? {"Content-Type":"application/json"} : undefined,
     body: opts.body ? JSON.stringify(opts.body) : undefined
@@ -354,8 +359,8 @@ function closeWins(){ document.querySelectorAll(".scrim").forEach(s=>s.classList
 document.querySelectorAll("[data-close]").forEach(b=>b.onclick=closeWins);
 document.querySelectorAll(".scrim").forEach(s=>s.addEventListener("click",e=>{ if(e.target===s) closeWins(); }));
 
-$("#btnSettings").onclick = () => { $("#keyIn").value = key() || ""; $("#unitSel").value = unit; openWin("winSettings"); };
-$("#saveKey").onclick = () => { const v=$("#keyIn").value.trim(); if(!v){ toast("Enter a key",true); return; } store.set(LS.key,v); closeWins(); toast("Key saved"); load(); };
+$("#btnSettings").onclick = () => { $("#keyIn").value = key() || ""; $("#relayIn").value = relay(); $("#unitSel").value = unit; openWin("winSettings"); };
+$("#saveKey").onclick = () => { const v=$("#keyIn").value.trim(); store.set(LS.relay,$("#relayIn").value.trim()); if(!v && !key()){ toast("Enter a key",true); return; } if(v) store.set(LS.key,v); closeWins(); toast("Saved"); load(); };
 $("#copyKey").onclick = async () => { const k=key(); if(!k){ toast("No key saved",true); return; } try{ await navigator.clipboard.writeText(k); toast("Key copied"); }catch(e){ toast("Copy blocked by browser",true); } };
 $("#rmKey").onclick = () => { if(!key()){ toast("No key saved",true); return; } if(confirm("Remove the saved API key from this device?")){ store.del(LS.key); pods=[]; timers={}; $("#keyIn").value=""; closeWins(); render(); toast("Key removed"); } };
 $("#unitSel").onchange = e => { unit=e.target.value; store.set(LS.unit,unit); render(); };
@@ -371,8 +376,14 @@ async function runTest(){
   L.innerHTML = out.join("");
   if(!k) return;
   let pl = null;
+  if(relay()){
+    try{ const r = await fetch(relay()+"/ping"); out.push(tRow(r.ok,"Reached relay", r.ok ? "Worker answered" : "HTTP "+r.status)); }
+    catch(e){ out.push(tRow(false,"Reached relay","Blocked or wrong URL: "+e.message)); }
+    L.innerHTML = out.join("");
+  } else out.push(tRow(false,"Relay set","No relay URL; direct calls are usually blocked by CORS"));
+  L.innerHTML = out.join("");
   try{
-    const r = await fetch(API+"/users/me/pods?fields=id,room&apiKey="+encodeURIComponent(k));
+    const r = await fetch(base()+"/users/me/pods?fields=id,room&apiKey="+encodeURIComponent(k));
     if(r.ok){ pl = (await r.json()).result || []; out.push(tRow(true,"Reached Sensibo","Browser can talk to the API")); }
     else out.push(tRow(false,"Reached Sensibo","HTTP "+r.status+(r.status===401||r.status===403?" — key rejected":"")));
   }catch(e){ out.push(tRow(false,"Reached Sensibo","Blocked or offline: "+e.message)); }
