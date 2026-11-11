@@ -159,7 +159,7 @@ input[type=text],input[type=password],input[type=time],select{width:100%;padding
 <div class="toast" id="toast"></div>
 
 <script>
-const VERSION = "v0.2";
+const VERSION = "v0.3";
 document.getElementById("verTag").textContent = VERSION;
 
 const API = "https://home.sensibo.com/api/v2";
@@ -263,8 +263,15 @@ function card(p){
     <div class="seg">${modes.map(x=>`<button class="${x===mode?"on":""}" style="--c:${MODE_COLOR[x]||"var(--accent)"}" data-act="mode" data-v="${x}" data-id="${p.id}" data-hint="Set mode to ${MODE_LABEL[x]||x}">${MODE_LABEL[x]||x}</button>`).join("")}</div>
     <div class="lbl">Fan</div>
     <div class="seg">${fans.map(x=>`<button class="${x===s.fanLevel?"on":""}" data-act="fan" data-v="${x}" data-id="${p.id}" data-hint="Set fan to ${x}">${x[0].toUpperCase()+x.slice(1)}</button>`).join("")}</div>
+    ${(()=>{ const mh=minHeat(p); return mh ? `<div class="footrow"><button class="btn" data-act="minheat" data-id="${p.id}" data-hint="Heat at the lowest temperature this unit allows (${mh.t}°${mh.u})">Min heat · ${mh.t}°${mh.u}</button></div>` : ""; })()}
     <div class="timerline">${tline}<button class="btn" data-act="timer" data-id="${p.id}" data-hint="Set a time for the AC to start">⏱ Timer</button></div>
   </div>`;
+}
+function minHeat(p){
+  const u = (p.acState && p.acState.temperatureUnit) || "C";
+  const h = p.remoteCapabilities && p.remoteCapabilities.modes && p.remoteCapabilities.modes.heat;
+  const v = h && h.temperatures && h.temperatures[u] && h.temperatures[u].values;
+  return v && v.length ? {t:Math.min.apply(null,v), u:u} : null;
 }
 function bind(){
   document.querySelectorAll("[data-act]").forEach(b => b.onclick = () => act(b.dataset.act, b.dataset.id, b.dataset.v));
@@ -290,6 +297,7 @@ async function act(a, id, v){
   const p = pods.find(x=>x.id===id); if(!p) return;
   const s = p.acState;
   if(a==="power") return pushState(p,{on:!s.on});
+  if(a==="minheat"){ const mh=minHeat(p); if(!mh) return; return pushState(p,{mode:"heat", on:true, targetTemperature:mh.t}); }
   if(a==="mode")  return pushState(p,{mode:v, on:true});
   if(a==="fan")   return pushState(p,{fanLevel:v});
   if(a==="inc"||a==="dec"){
