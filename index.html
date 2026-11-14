@@ -118,6 +118,8 @@ input[type=text],input[type=password],input[type=time],select{width:100%;padding
 .toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:#000;border:1px solid var(--line);padding:10px 16px;border-radius:12px;z-index:400;display:none;font-size:14px}
 .toast.err{border-color:var(--bad)}
 .spin{opacity:.5;pointer-events:none}
+.dump{display:none;width:100%;height:150px;margin-top:10px;background:var(--bg);color:var(--muted);border:1px solid var(--line);border-radius:10px;font:11px/1.35 ui-monospace,Menlo,monospace;padding:8px;resize:none}
+.dump.show{display:block}
 
 /* iPhone portrait: one locked screen, no scrolling */
 @media (max-width:600px) and (orientation:portrait){
@@ -224,10 +226,29 @@ input[type=text],input[type=password],input[type=time],select{width:100%;padding
   <div class="body"><div class="kv" id="detBody"></div></div>
 </div></div>
 
+<!-- Hawaii (FGLair) connection test window -->
+<div class="scrim" id="winHawaii"><div class="win">
+  <header><h1>Hawaii connection test</h1><button class="btn icon" data-close data-hint="Close">✕</button></header>
+  <div class="body">
+    <label for="fgEmail">FGLair email</label>
+    <input type="text" id="fgEmail" autocomplete="username" autocapitalize="off" autocorrect="off" inputmode="email" placeholder="Your FGLair account email">
+    <label for="fgPass">FGLair password</label>
+    <input type="password" id="fgPass" autocomplete="current-password" placeholder="Needed only to sign in">
+    <p class="note">The password goes through your relay to sign in and is never saved. Only the sign-in token is kept on this device. Leave the password empty to reuse the saved sign-in.</p>
+    <div class="footrow">
+      <button class="btn primary" id="fgRun" data-hint="Sign in and run the four checks">Sign in &amp; test</button>
+      <button class="btn" id="fgCopy" data-hint="Copy the raw unit readings so they can be pasted into chat">Copy readings</button>
+      <button class="btn danger" id="fgOut" data-hint="Sign out and delete the saved token (asks first)">Sign out</button>
+    </div>
+    <div class="tests" id="fgList"></div>
+    <textarea class="dump" id="fgDump" readonly></textarea>
+  </div>
+</div></div>
+
 <div class="toast" id="toast"></div>
 
 <script>
-const VERSION = "v0.6";
+const VERSION = "v0.7";
 try{ if(window.navigator.standalone) document.documentElement.classList.add("standalone"); }catch(e){}
 document.getElementById("verTag").textContent = VERSION;
 
@@ -289,6 +310,12 @@ function renderTabs(){
 const toUnit = c => unit==="F" ? Math.round(c*9/5+32) : Math.round(c*10)/10;
 function render(){
   const v = $("#view");
+  if(tab === "hawaii"){
+    const on = !!store.get(FGK.tok);
+    v.innerHTML = `<div class="ph"><h2>Hawaii</h2>Fujitsu units on FGLair.<br><span class="pill">${on?"Signed in on this device":"Not signed in"}</span><div class="footrow" style="justify-content:center"><button class="btn primary" id="fgOpen" data-hint="Sign in to FGLair and check the connection (pass / fail)">Hawaii connection test</button></div></div>`;
+    $("#fgOpen").onclick = openHawaii;
+    return;
+  }
   if(tab !== "cabana"){
     const l = LOCS.find(x=>x.id===tab);
     v.innerHTML = `<div class="ph"><h2>${l.name}</h2>Fujitsu units on ${l.sub}.<br><span class="pill">Placeholder — coming next</span></div>`;
@@ -523,6 +550,83 @@ async function runTest(){
 }
 $("#runTest").onclick = runTest;
 $("#btnTest").onclick = () => { openWin("winTest"); runTest(); };
+
+/* ---------- Hawaii (FGLair) pass / fail test ---------- */
+const FGK = {email:"acctl.fg.email", tok:"acctl.fg.token", ref:"acctl.fg.refresh"};
+const fgBase = () => relay() + "/fglair";
+async function fgPost(path, body){
+  const r = await fetch(fgBase()+path, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+  let j = null; try{ j = await r.json() }catch(e){}
+  return {ok:r.ok, status:r.status, json:j};
+}
+function fgSave(j){ if(j.access_token) store.set(FGK.tok, j.access_token); if(j.refresh_token) store.set(FGK.ref, j.refresh_token); }
+async function fgSignIn(email, pass){
+  const r = await fgPost("/signin", {email, password:pass});
+  if(!r.ok || !r.json || !r.json.access_token){
+    throw new Error(r.status===401 ? "Wrong email or password (HTTP 401)" : "HTTP "+r.status+((r.json&&(r.json.error||r.json.errors))?" — "+JSON.stringify(r.json.error||r.json.errors):""));
+  }
+  fgSave(r.json); store.set(FGK.email, email);
+}
+async function fgApi(path){
+  const go = () => fetch(fgBase()+"/api/"+path, {headers:{Authorization:"auth_token "+store.get(FGK.tok)}});
+  let r = await go();
+  if(r.status===401 && store.get(FGK.ref)){
+    const t = await fgPost("/refresh", {refresh_token:store.get(FGK.ref)});
+    if(t.ok && t.json && t.json.access_token){ fgSave(t.json); r = await go(); }
+  }
+  if(!r.ok) throw new Error("HTTP "+r.status+(r.status===401?" — sign in again":""));
+  return r.json();
+}
+function openHawaii(){
+  $("#fgEmail").value = store.get(FGK.email) || ""; $("#fgPass").value = "";
+  $("#fgList").innerHTML = ""; $("#fgDump").classList.remove("show");
+  openWin("winHawaii");
+}
+async function runFgTest(){
+  const out = [], L = $("#fgList"), D = $("#fgDump");
+  const show = () => { L.innerHTML = out.join(""); };
+  D.classList.remove("show"); D.value = "";
+  if(!relay()){ out.push(tRow(false,"Relay set","Add your relay URL in Settings first")); show(); return; }
+  try{ const r = await fetch(relay()+"/ping"); out.push(tRow(r.ok,"Reached relay", r.ok?"Worker answered":"HTTP "+r.status)); if(!r.ok){ show(); return; } }
+  catch(e){ out.push(tRow(false,"Reached relay","Blocked or wrong URL: "+e.message)); show(); return; }
+  show();
+  const email = $("#fgEmail").value.trim(), pass = $("#fgPass").value;
+  try{
+    if(pass){
+      if(!email) throw new Error("Enter your email");
+      await fgSignIn(email, pass);
+      $("#fgPass").value = "";
+      out.push(tRow(true,"Signed in to FGLair","Token saved on this device"));
+    } else if(store.get(FGK.tok)){
+      out.push(tRow(true,"Saved sign-in found","Reusing the token on this device"));
+    } else throw new Error("Enter your password to sign in");
+  }catch(e){ out.push(tRow(false,"Signed in to FGLair", e.message)); show(); return; }
+  show();
+  let devs = [];
+  try{
+    const r = await fgApi("devices.json");
+    devs = (r||[]).map(x => x.device || x);
+    out.push(tRow(devs.length>0,"Units found", devs.length ? devs.map(d => (d.product_name||d.model||"Unit")+" ("+d.dsn+")").join(", ") : "Signed in but no units on this account"));
+  }catch(e){ out.push(tRow(false,"Units found", e.message)); show(); return; }
+  show();
+  if(!devs.length) return;
+  try{
+    let dump = "";
+    for(const d of devs){
+      const r = await fgApi("dsns/"+d.dsn+"/properties.json");
+      const props = (r||[]).map(x => x.property || x);
+      dump += "# "+(d.product_name||"Unit")+" "+d.dsn+" model:"+(d.model||"?")+" — "+props.length+" properties\n" +
+        props.map(p => p.name+" = "+(typeof p.value==="string" && p.value.length>60 ? p.value.slice(0,60)+"…" : p.value)+"  ["+p.base_type+", "+p.direction+", key "+p.key+"]").join("\n") + "\n\n";
+    }
+    out.push(tRow(true,"Readings available", "Tap Copy readings and paste them into chat"));
+    D.value = dump; D.classList.add("show");
+  }catch(e){ out.push(tRow(false,"Readings available", e.message)); }
+  show();
+  if(tab==="hawaii") render();
+}
+$("#fgRun").onclick = runFgTest;
+$("#fgCopy").onclick = async () => { const v=$("#fgDump").value; if(!v){ toast("Run the test first",true); return; } try{ await navigator.clipboard.writeText(v); toast("Readings copied"); }catch(e){ $("#fgDump").select(); toast("Select and copy manually",true); } };
+$("#fgOut").onclick = () => { if(!store.get(FGK.tok)){ toast("Not signed in",true); return; } if(confirm("Sign out of FGLair and delete the saved token from this device?")){ store.del(FGK.tok); store.del(FGK.ref); $("#fgList").innerHTML=""; $("#fgDump").classList.remove("show"); toast("Signed out"); if(tab==="hawaii") render(); } };
 
 renderTabs(); render(); load();
 setInterval(() => { if(document.hidden || tab!=="cabana" || !key() || document.querySelector(".scrim.open")) return; load(true); }, 60000);
